@@ -67,8 +67,8 @@ namespace compute.geometry
                 _watchedFileRuntimeSerialNumber++;
         }
 
-        static void LogDebug(string message) { Log.Debug(message); }
-        static void LogError(string message) { Log.Error(message); }
+        public static void LogDebug(string message) { Log.Debug(message); }
+        public static void LogError(string message) { Log.Error(message); }
 
         public static GrasshopperDefinition FromUrl(string url, bool cache)
         {
