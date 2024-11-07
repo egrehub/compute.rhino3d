@@ -17,6 +17,7 @@ using Grasshopper.Kernel.Data;
 using Rhino;
 using System.Drawing;
 using Grasshopper;
+using Grasshopper.Kernel.Expressions;
 
 namespace Hops
 {
@@ -88,12 +89,15 @@ namespace Hops
             _enabledThisSolve = true;
             _lastCreatedSchema = null;
             _solveRecursionLevel = 0;
-            var doc = OnPingDocument();
 
-            if (_isHeadless && doc != null)
+            if (_isHeadless &&
+                    OnPingDocument() is GH_Document doc)
             {
-                // compute will set the ComputeRecursionLevel 
-                _solveRecursionLevel = doc.ConstantServer["ComputeRecursionLevel"]._Int;
+                if (doc.ConstantServer.TryGetValue("ComputeRecursionLevel", out GH_Variant recursionLevel))
+                    // compute will set the ComputeRecursionLevel 
+                    _solveRecursionLevel = recursionLevel._Int;
+                else
+                    _solveRecursionLevel = HopsAppSettings.RecursionLimit;
             }
 
             if (!_solvedCallback)
