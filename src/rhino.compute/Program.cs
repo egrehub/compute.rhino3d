@@ -119,8 +119,6 @@ requests while the child processes are launching.")]
             var logger = host.Services.GetRequiredService<ILogger<ReverseProxyModule>>();
             ReverseProxyModule.InitializeConcurrentRequestLogging(logger);
 
-            // Initialize monitoring to enforce child process limits and cleanup
-            ComputeChildren.InitializeMonitoring(); // Added to start the monitoring timer
 
             if (_parentProcess != null)
             {

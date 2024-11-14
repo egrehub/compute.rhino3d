@@ -80,8 +80,6 @@ namespace rhino.compute
 
             lock (_lockObject)
             {
-                // Clean up exited or unresponsive processes
-                CleanUpProcesses(); // Added to ensure only responsive processes are kept
 
                 if (_computeProcesses.Count > 0)
                 {
@@ -109,7 +107,6 @@ namespace rhino.compute
                 throw new Exception("No compute server found");
 
             // Ensure that the number of compute.geometry does not exceed SpawnCount
-            MaintainSpawnCount(); // Added to enforce maximum number of child processes
 
             //Log.Information($"Started child process at http://localhost:{activePort} at {DateTime.Now.ToLocalTime()}");
             return ($"http://localhost:{activePort}", activePort);
@@ -254,103 +251,7 @@ namespace rhino.compute
         static object _lockObject = new object();
         static Queue<Tuple<Process, int>> _computeProcesses = new Queue<Tuple<Process, int>>();
 
-        // Added monitoring timer to regularly check and maintain compute.geometry processes
-        static System.Timers.Timer _monitoringTimer;
-
-        /// <summary>
-        /// Initializes the monitoring timer to periodically check compute.geometry processes
-        /// </summary>
-        public static void InitializeMonitoring()
-        {
-            _monitoringTimer = new System.Timers.Timer(30000); // Check every 30 seconds
-            _monitoringTimer.Elapsed += (sender, e) => MonitorProcesses();
-            _monitoringTimer.AutoReset = true;
-            _monitoringTimer.Enabled = true;
-        }
-
-        /// <summary>
-        /// Monitors the compute.geometry processes and enforces SpawnCount
-        /// </summary>
-        private static void MonitorProcesses()
-        {
-            lock (_lockObject)
-            {
-                CleanUpProcesses();
-                MaintainSpawnCount();
-            }
-        }
-
-        /// <summary>
-        /// Cleans up exited or unresponsive compute.geometry processes
-        /// </summary>
-        private static void CleanUpProcesses()
-        {
-            var processesToKeep = new List<Tuple<Process, int>>();
-            foreach (var proc in _computeProcesses)
-            {
-                if (!proc.Item1.HasExited && IsProcessResponsive(proc.Item1))
-                {
-                    processesToKeep.Add(proc);
-                }
-                else
-                {
-                    try
-                    {
-                        proc.Item1.Kill();
-                        Log.Information($"Killed unresponsive compute.geometry process on port {proc.Item2}");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error($"Error killing process on port {proc.Item2}: {ex.Message}");
-                    }
-                }
-            }
-            _computeProcesses = new Queue<Tuple<Process, int>>(processesToKeep);
-        }
-
-        /// <summary>
-        /// Checks if a compute.geometry process is responsive
-        /// </summary>
-        /// <param name="process">Process to check</param>
-        /// <returns>True if responsive, otherwise false</returns>
-        private static bool IsProcessResponsive(Process process)
-        {
-            // Implement a simple check, such as verifying if the port is open
-            // Assuming each compute.geometry process has a unique port
-            foreach (var tuple in _computeProcesses)
-            {
-                if (tuple.Item1.Id == process.Id)
-                {
-                    return IsPortOpen("localhost", tuple.Item2, TimeSpan.FromSeconds(1));
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Maintains the spawn count by launching or killing processes as needed
-        /// </summary>
-        private static void MaintainSpawnCount()
-        {
-            while (_computeProcesses.Count > SpawnCount)
-            {
-                var proc = _computeProcesses.Dequeue();
-                try
-                {
-                    proc.Item1.Kill();
-                    Log.Information($"Killed excess compute.geometry process on port {proc.Item2}");
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"Error killing process on port {proc.Item2}: {ex.Message}");
-                }
-            }
-
-            while (_computeProcesses.Count < SpawnCount)
-            {
-                LaunchCompute(false);
-            }
-        }
+      
     }
 }
 
