@@ -23,6 +23,7 @@ namespace rhino.compute
             [Option("childof",
              Required = false,
              HelpText = @"Process Handle of parent process. Compute watches for the existence 
+Process Handle of parent process. Compute watches for the existence 
 of this handle and will shut down when this process has exited")]
             public int ChildOf { get; set; }
 
@@ -117,6 +118,9 @@ requests while the child processes are launching.")]
             
             var logger = host.Services.GetRequiredService<ILogger<ReverseProxyModule>>();
             ReverseProxyModule.InitializeConcurrentRequestLogging(logger);
+
+            // Initialize monitoring to enforce child process limits and cleanup
+            ComputeChildren.InitializeMonitoring(); // Added to start the monitoring timer
 
             if (_parentProcess != null)
             {
