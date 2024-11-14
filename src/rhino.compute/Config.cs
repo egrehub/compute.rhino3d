@@ -28,7 +28,7 @@ namespace rhino.compute
         public static void Load()
         {
             ApiKey = GetEnvironmentVariable<string>(RHINO_COMPUTE_KEY, null);
-            ReverseProxyRequestTimeout = GetEnvironmentVariable<int>(RHINO_COMPUTE_TIMEOUT, 100);
+            ReverseProxyRequestTimeout = GetEnvironmentVariable<int>(RHINO_COMPUTE_TIMEOUT, 180);
             MaxRequestSize = GetEnvironmentVariable<long>(RHINO_COMPUTE_MAX_REQUEST_SIZE, 52428800);
         }
 

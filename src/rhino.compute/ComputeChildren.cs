@@ -235,6 +235,8 @@ namespace rhino.compute
             {
                 processQueue.Enqueue(Tuple.Create(process, port));
             }
+
+            
         }
 
         static bool IsPortOpen(string host, int port, TimeSpan timeout)
