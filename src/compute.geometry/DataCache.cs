@@ -14,12 +14,15 @@ namespace compute.geometry
             public uint WatchedFileRuntimeSerialNumber { get; set; }
         }
 
+        // Commented out CachedResults class as caching of solve results is disabled
+        /*
         class CachedResults
         {
             public GrasshopperDefinition Definition { get; set; }
             public uint WatchedFileRuntimeSerialNumber { get; set; }
             public string Json { get; set; }
         }
+        */
 
         public static string CreateCacheKey(string input)
         {
@@ -169,39 +172,16 @@ namespace compute.geometry
             }
         }
 
+        // Disabled caching of solve results by always returning null
         public static string GetCachedSolveResults(string key)
         {
-            if (string.IsNullOrWhiteSpace(key))
-                return null;
-            var cache = System.Runtime.Caching.MemoryCache.Default.Get(key) as CachedResults;
-            if (cache == null)
-                return null;
-
-            if (cache.Definition.IsLocalFileDefinition)
-            {
-                if (cache.WatchedFileRuntimeSerialNumber != GrasshopperDefinition.WatchedFileRuntimeSerialNumber)
-                {
-                    System.Runtime.Caching.MemoryCache.Default.Remove(key);
-                    return null;
-                }
-            }
-
-            return cache.Json;
+            return null;
         }
 
+        // Disabled caching of solve results by doing nothing
         public static void SetCachedSolveResults(string key, string jsonResults, GrasshopperDefinition definition)
         {
-            if (string.IsNullOrWhiteSpace(key))
-                return;
-
-            var cache = new CachedResults
-            {
-                Definition = definition,
-                WatchedFileRuntimeSerialNumber = GrasshopperDefinition.WatchedFileRuntimeSerialNumber,
-                Json = jsonResults
-            };
-
-            System.Runtime.Caching.MemoryCache.Default.Add(key, cache, CachePolicy);
+            // Do nothing to disable caching of solve results
         }
 
         public static object GetCachedItem(JToken token, Type objectType, JsonSerializer serializer)
