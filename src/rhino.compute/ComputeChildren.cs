@@ -107,6 +107,7 @@ namespace rhino.compute
                 throw new Exception("No compute server found");
 
             // Ensure that the number of compute.geometry does not exceed SpawnCount
+            MaintainSpawnCount(); // Added to enforce maximum number of child processes
 
             //Log.Information($"Started child process at http://localhost:{activePort} at {DateTime.Now.ToLocalTime()}");
             return ($"http://localhost:{activePort}", activePort);
@@ -229,6 +230,31 @@ namespace rhino.compute
             }
 
             
+        }
+
+        /// <summary>
+        /// Maintains the spawn count by launching or killing processes as needed
+        /// </summary>
+        private static void MaintainSpawnCount()
+        {
+            while (_computeProcesses.Count > SpawnCount)
+            {
+                var proc = _computeProcesses.Dequeue();
+                try
+                {
+                    proc.Item1.Kill();
+                    Log.Information($"Killed excess compute.geometry process on port {proc.Item2}");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Error killing process on port {proc.Item2}: {ex.Message}");
+                }
+            }
+
+            while (_computeProcesses.Count < SpawnCount)
+            {
+                LaunchCompute(true);
+            }
         }
 
         static bool IsPortOpen(string host, int port, TimeSpan timeout)
