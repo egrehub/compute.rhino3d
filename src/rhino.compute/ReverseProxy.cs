@@ -36,12 +36,12 @@ namespace rhino.compute
         static void InitializeChildren()
         {
             ComputeChildren.UpdateLastCall();
-            _initTask = Task.Run(() =>
+            _initTask = Task.Run(async () =>
             {
-                var (url, port) = ComputeChildren.GetComputeServerBaseUrl();
+                var (baseurl, port, _) = await ComputeChildren.GetComputeServerInfoAsync();
+                ComputeChildren.ReleaseProcess(port);
             });
         }
-
         static System.Timers.Timer _concurrentRequestLogger;
         static int _activeConcurrentRequests;
         static int _maxConcurrentRequests;
@@ -96,7 +96,7 @@ namespace rhino.compute
             int parentProcessId = System.Convert.ToInt32(request.Query["parent"]);
             if (Program.IsParentRhinoProcess(parentProcessId))
             {
-                for(int i=0; i<children; i++)
+                for (int i = 0; i < children; i++)
                 {
                     ComputeChildren.LaunchCompute(false);
                 }
@@ -154,11 +154,12 @@ namespace rhino.compute
             string responseString;
             using (var tracker = new ConcurrentRequestTracker())
             {
-                var (baseurl, port) = ComputeChildren.GetComputeServerBaseUrl();
+                var (baseurl, port, _) = await ComputeChildren.GetComputeServerInfoAsync();
                 var proxyResponse = await SendProxyRequest(req, HttpMethod.Get, baseurl);
                 ComputeChildren.UpdateLastCall();
 
                 responseString = await proxyResponse.Content.ReadAsStringAsync();
+                ComputeChildren.ReleaseProcess(port);
             }
             await res.WriteAsync(responseString);
         }
@@ -169,12 +170,14 @@ namespace rhino.compute
             string responseString;
             using (var tracker = new ConcurrentRequestTracker())
             {
-                var (baseurl, port) = ComputeChildren.GetComputeServerBaseUrl();
+                var (baseurl, port, _) = await ComputeChildren.GetComputeServerInfoAsync();
                 var proxyResponse = await SendProxyRequest(req, HttpMethod.Post, baseurl);
                 ComputeChildren.UpdateLastCall();
 
                 res.StatusCode = (int)proxyResponse.StatusCode;
                 responseString = await proxyResponse.Content.ReadAsStringAsync();
+                ComputeChildren.ReleaseProcess(port);
+
             }
             await res.WriteAsync(responseString);
         }
@@ -185,14 +188,16 @@ namespace rhino.compute
             string responseString;
             using (var tracker = new ConcurrentRequestTracker())
             {
-                var (baseurl, port) = ComputeChildren.GetComputeServerBaseUrl();
+                var (baseurl, port, _) = await ComputeChildren.GetComputeServerInfoAsync();
                 var proxyResponse = await SendProxyRequest(req, HttpMethod.Post, baseurl);
                 ComputeChildren.UpdateLastCall();
 
                 res.StatusCode = (int)proxyResponse.StatusCode;
                 responseString = await proxyResponse.Content.ReadAsStringAsync();
+                ComputeChildren.ReleaseProcess(port);
             }
             await res.WriteAsync(responseString);
+
         }
     }
 }
