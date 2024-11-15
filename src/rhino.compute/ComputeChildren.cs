@@ -1,6 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Sockets;
+using System.Threading;
 using Serilog;
 
 namespace rhino.compute
@@ -26,18 +30,19 @@ namespace rhino.compute
         public static TimeSpan ChildIdleSpan { get; set; } = TimeSpan.Zero;
 
         /// <summary>
-        /// This value determines whether a child process should be started
-        /// when rhino.compute is first launched. If running in a production
-        /// environment, this value should be set to false.
+        /// Determines whether a child process should be started
+        /// when rhino.compute is first launched.
         /// </summary>
         public static bool SpawnOnStartup { get; set; } = false;
 
         /// <summary>Port that rhino.compute is running on</summary>
         public static int ParentPort { get; set; } = 5000;
+
         /// <summary>
         /// The system directory for the Rhino executable
         /// </summary>
-        public static string RhinoSysDir { get; set; } 
+        public static string RhinoSysDir { get; set; }
+
         /// <summary>
         /// Length of time (in seconds) since rhino.compute last made a call
         /// to a child process. The child processes use this information to
@@ -54,6 +59,7 @@ namespace rhino.compute
             var span = DateTime.Now - _lastCall;
             return (int)span.TotalSeconds;
         }
+
         /// <summary>
         /// Total number of compute.geometry processes being run
         /// </summary>
@@ -61,86 +67,90 @@ namespace rhino.compute
         {
             get
             {
-                var processes = Process.GetProcessesByName("compute.geometry");
-                return processes.Length;
+                lock (_lockObject)
+                {
+                    return _computeProcesses.Count;
+                }
             }
         }
 
+        static object _lockObject = new object();
+        static List<ComputeProcessInfo> _computeProcesses = new List<ComputeProcessInfo>();
+
         /// <summary>
-        /// Get base url for a compute server. This function may return a
-        /// different string each time it is called as it attempts to provide
-        /// basic round robin scheduling when multiple compute servers are
-        /// found to be available.
+        /// Get base URL for a compute server. This function will wait until a
+        /// compute.geometry process is available, either because one is free or because
+        /// a new one has been spawned.
         /// </summary>
         /// <returns></returns>
         public static (string, int) GetComputeServerBaseUrl()
         {
-            // Simple round robin scheduler using a queue of compute.geometry processes
-            int activePort = 0;
+            UpdateLastCall();
+            Stopwatch sw = Stopwatch.StartNew();
 
-            lock (_lockObject)
+            while (true)
             {
+                ComputeProcessInfo availableProcess = null;
 
-                if (_computeProcesses.Count > 0)
+                lock (_lockObject)
                 {
-                    Tuple<Process, int> current = _computeProcesses.Dequeue();
-                    if (!current.Item1.HasExited)
+                    CleanupExitedProcesses();
+
+                    // Try to find a free compute.geometry process
+                    foreach (var procInfo in _computeProcesses)
                     {
-                        _computeProcesses.Enqueue(current);
-                        activePort = current.Item2;
-                    }
-                }
-
-                if (activePort == 0 && _computeProcesses.Count < SpawnCount)
-                {
-                    LaunchCompute(true);
-                    if (_computeProcesses.Count > 0)
-                    {
-                        Tuple<Process, int> current = _computeProcesses.Dequeue();
-                        _computeProcesses.Enqueue(current);
-                        activePort = current.Item2;
-                    }
-                }
-            }
-
-            if (0 == activePort)
-                throw new Exception("No compute server found");
-
-            // Ensure that the number of compute.geometry does not exceed SpawnCount
-            MaintainSpawnCount(); // Added to enforce maximum number of child processes
-
-            //Log.Information($"Started child process at http://localhost:{activePort} at {DateTime.Now.ToLocalTime()}");
-            return ($"http://localhost:{activePort}", activePort);
-        }
-
-        public static void MoveToFrontOfQueue(int port)
-        {
-            lock (_lockObject)
-            {
-                // TODO: We really should be using a simple list with an index
-                // pointing at the next item to use
-                if (_computeProcesses.Count > 1)
-                {
-                    for( int i=0; i<_computeProcesses.Count; i++)
-                    {
-                        if (_computeProcesses.Peek().Item2 == port)
+                        if (!IsComputeGeometryBusy(procInfo.Port))
+                        {
+                            // Found a free process
+                            availableProcess = procInfo;
                             break;
-                        var item = _computeProcesses.Dequeue();
-                        _computeProcesses.Enqueue(item);
+                        }
+                    }
+
+                    if (availableProcess != null)
+                    {
+                        // We have a free process
+                        return ($"http://localhost:{availableProcess.Port}", availableProcess.Port);
+                    }
+
+                    // All processes are busy
+                    // If we can spawn more processes, do so
+                    if (_computeProcesses.Count < SpawnCount)
+                    {
+                        var newProcessInfo = LaunchCompute(waitUntilServing: true);
+                        if (newProcessInfo != null)
+                        {
+                            _computeProcesses.Add(newProcessInfo);
+                            availableProcess = newProcessInfo;
+                            return ($"http://localhost:{availableProcess.Port}", availableProcess.Port);
+                        }
                     }
                 }
+
+                // No available process, wait for one to become free
+                if (sw.Elapsed.TotalSeconds > 60)
+                {
+                    throw new Exception("No compute server available after waiting 60 seconds");
+                }
+
+                Thread.Sleep(1000); // Wait for 1 second before trying again
             }
         }
 
-        public static void LaunchCompute(bool waitUntilServing)
+        /// <summary>
+        /// Cleans up any compute.geometry processes that have exited.
+        /// </summary>
+        static void CleanupExitedProcesses()
         {
-            lock (_lockObject)
-            {
-                LaunchCompute(_computeProcesses, waitUntilServing);
-            }
+            _computeProcesses.RemoveAll(p => p.Process.HasExited);
         }
 
-        static void LaunchCompute(Queue<Tuple<Process, int>> processQueue, bool waitUntilServing)
+        /// <summary>
+        /// Launches a new compute.geometry process.
+        /// </summary>
+        /// <param name="waitUntilServing">Whether to wait until the process is ready.</param>
+        /// <returns>The process information of the launched compute.geometry process.</returns>
+        public static ComputeProcessInfo LaunchCompute(bool waitUntilServing)
         {
             var pathToThisAssembly = new System.IO.FileInfo(typeof(ComputeChildren).Assembly.Location);
             // compute.geometry is allowed to be either in:
@@ -153,22 +163,18 @@ namespace rhino.compute
             {
                 pathToCompute = System.IO.Path.Combine(pathToThisAssembly.Directory.FullName, "compute.geometry", "compute.geometry.exe");
                 if (!System.IO.File.Exists(pathToCompute))
-                    return;
+                    return null;
             }
 
-            var existingProcesses = processQueue.ToArray();
-            var existingPorts = new HashSet<int>();
-            foreach (var proc in existingProcesses)
-                existingPorts.Add(proc.Item2);
+            var existingPorts = new HashSet<int>(_computeProcesses.Select(p => p.Port));
 
             int port = 0;
             for (int i = 0; i < 256; i++)
             {
-                // start at port 6001. Feel free to change this if there is a reason
-                // to use a different port
+                // start at port 6001
                 port = 6001 + i;
                 if (i == 255)
-                    return;
+                    return null;
 
                 if (existingPorts.Contains(port))
                     continue;
@@ -207,11 +213,18 @@ namespace rhino.compute
                     {
                         break;
                     }
-                        
+
                     var span = DateTime.Now - start;
                     if (span.TotalSeconds > 180) // Increased timeout from 60 to 180 seconds
                     {
-                        process.Kill();
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Failed to kill compute.geometry process");
+                        }
                         string msg = "Unable to start a local compute server within 180 seconds";
                         Log.Information(msg);
                         throw new Exception(msg);
@@ -220,64 +233,83 @@ namespace rhino.compute
             }
             else
             {
-                // no matter what, give compute a little time to start
+                // No matter what, give compute a little time to start
                 System.Threading.Thread.Sleep(100);
             }
 
             if (process != null)
             {
-                processQueue.Enqueue(Tuple.Create(process, port));
+                var processInfo = new ComputeProcessInfo
+                {
+                    Process = process,
+                    Port = port
+                };
+                return processInfo;
             }
-
-            
+            return null;
         }
+
+        private static bool IsComputeGeometryBusy(int port)
+        {
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(1);
+                    var response = client.GetAsync($"http://localhost:{port}/isbusy").Result;
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var content = response.Content.ReadAsStringAsync().Result;
+                        if (int.TryParse(content, out int activeRequests))
+                        {
+                            return activeRequests > 0;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // If we can't connect, assume the process is busy or unavailable
+                return true;
+            }
+            return true;
+        }
+
 
         /// <summary>
-        /// Maintains the spawn count by launching or killing processes as needed
+        /// Checks if a TCP port is open.
         /// </summary>
-        private static void MaintainSpawnCount()
-        {
-            while (_computeProcesses.Count > SpawnCount)
-            {
-                var proc = _computeProcesses.Dequeue();
-                try
-                {
-                    proc.Item1.Kill();
-                    Log.Information($"Killed excess compute.geometry process on port {proc.Item2}");
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"Error killing process on port {proc.Item2}: {ex.Message}");
-                }
-            }
-
-            while (_computeProcesses.Count < SpawnCount)
-            {
-                LaunchCompute(true);
-            }
-        }
-
+        /// <param name="host">The hostname to check.</param>
+        /// <param name="port">The port number to check.</param>
+        /// <param name="timeout">The timeout for the check.</param>
+        /// <returns>True if the port is open; otherwise, false.</returns>
         static bool IsPortOpen(string host, int port, TimeSpan timeout)
         {
             try
             {
-                using (var client = new System.Net.Sockets.TcpClient())
+                using (var client = new TcpClient())
                 {
                     var result = client.BeginConnect(host, port, null, null);
                     var success = result.AsyncWaitHandle.WaitOne(timeout);
+                    if (!success)
+                    {
+                        return false;
+                    }
                     client.EndConnect(result);
-                    return success;
+                    client.Close();
+                    return true;
                 }
             }
-            catch(Exception)
+            catch (Exception)
             {
                 return false;
             }
         }
-        static object _lockObject = new object();
-        static Queue<Tuple<Process, int>> _computeProcesses = new Queue<Tuple<Process, int>>();
 
-      
+        public class ComputeProcessInfo
+        {
+            public Process Process { get; set; }
+            public int Port { get; set; }
+        }
     }
 }
-

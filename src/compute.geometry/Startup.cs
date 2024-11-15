@@ -32,17 +32,39 @@ namespace compute.geometry
         {
             IOwinRequest req = ctx.Request;
 
-            // invoke the next middleware in the pipeline
-            await Next.Invoke(ctx);
 
-            IOwinResponse res = ctx.Response;
-            string contentLength = res.ContentLength > -1 ? res.ContentLength.ToString() : "-";
+            // Exclude /isbusy endpoint from incrementing the counter
+            bool incrementCounter = req.Uri.AbsolutePath != "/isbusy";
 
-            if (req.Uri.AbsolutePath != "/healthcheck" || req.Uri.AbsolutePath != "/favicon.ico")
+            if (incrementCounter)
             {
-                // log request in apache format
-                string msg = $"{req.RemoteIpAddress} - [{DateTime.Now:o}] \"{req.Method} {req.Uri.AbsolutePath} {req.Protocol}\" {res.StatusCode} {contentLength}";
-                Serilog.Log.Information(msg);
+                // Increment the active request counter
+                BusyStatus.Increment();
+            }
+
+            try
+            {
+                // Invoke the next middleware in the pipeline
+                await Next.Invoke(ctx);
+            }
+            finally
+            {
+                if (incrementCounter)
+                {
+                    // Decrement the active request counter
+                    BusyStatus.Decrement();
+                }
+
+                IOwinResponse res = ctx.Response;
+                string contentLength = res.ContentLength > -1 ? res.ContentLength.ToString() : "-";
+
+                // Corrected the condition to use && instead of ||
+                if (req.Uri.AbsolutePath != "/healthcheck" && req.Uri.AbsolutePath != "/favicon.ico")
+                {
+                    // Log request in Apache format
+                    string msg = $"{req.RemoteIpAddress} - [{DateTime.Now:o}] \"{req.Method} {req.Uri.AbsolutePath} {req.Protocol}\" {res.StatusCode} {contentLength}";
+                    Serilog.Log.Information(msg);
+                }
             }
         }
     }

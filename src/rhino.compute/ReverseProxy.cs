@@ -39,7 +39,6 @@ namespace rhino.compute
             _initTask = Task.Run(() =>
             {
                 var (url, port) = ComputeChildren.GetComputeServerBaseUrl();
-                ComputeChildren.MoveToFrontOfQueue(port);
             });
         }
 
@@ -158,8 +157,6 @@ namespace rhino.compute
                 var (baseurl, port) = ComputeChildren.GetComputeServerBaseUrl();
                 var proxyResponse = await SendProxyRequest(req, HttpMethod.Get, baseurl);
                 ComputeChildren.UpdateLastCall();
-                if (proxyResponse.StatusCode == System.Net.HttpStatusCode.OK)
-                    ComputeChildren.MoveToFrontOfQueue(port);
 
                 responseString = await proxyResponse.Content.ReadAsStringAsync();
             }
@@ -175,8 +172,6 @@ namespace rhino.compute
                 var (baseurl, port) = ComputeChildren.GetComputeServerBaseUrl();
                 var proxyResponse = await SendProxyRequest(req, HttpMethod.Post, baseurl);
                 ComputeChildren.UpdateLastCall();
-                if (proxyResponse.StatusCode == System.Net.HttpStatusCode.OK)
-                    ComputeChildren.MoveToFrontOfQueue(port);
 
                 res.StatusCode = (int)proxyResponse.StatusCode;
                 responseString = await proxyResponse.Content.ReadAsStringAsync();
@@ -193,8 +188,6 @@ namespace rhino.compute
                 var (baseurl, port) = ComputeChildren.GetComputeServerBaseUrl();
                 var proxyResponse = await SendProxyRequest(req, HttpMethod.Post, baseurl);
                 ComputeChildren.UpdateLastCall();
-                if (proxyResponse.StatusCode == System.Net.HttpStatusCode.OK)
-                    ComputeChildren.MoveToFrontOfQueue(port);
 
                 res.StatusCode = (int)proxyResponse.StatusCode;
                 responseString = await proxyResponse.Content.ReadAsStringAsync();

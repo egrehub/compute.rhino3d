@@ -20,7 +20,9 @@ namespace compute.geometry
             Get["sdk/csharp"] = _ => CSharpSdk(Context);
             Get["plugins/rhino/installed"] = _ => GetInstalledPluginsRhino(Context);
             Get["plugins/gh/installed"] = _ => GetInstalledPluginsGrasshopper(Context);
+            Get["/isbusy"] = _ => IsBusy(Context);
         }
+
 
         static Response HomePage(NancyContext ctx)
         {
@@ -102,6 +104,13 @@ namespace compute.geometry
 
             var response = (Response)Newtonsoft.Json.JsonConvert.SerializeObject(ghPluginInfo);
             response.ContentType = "application/json";
+            return response;
+        }
+        private Response IsBusy(NancyContext ctx)
+        {
+            var activeRequests = BusyStatus.GetActiveRequestCount();
+            var response = (Response)activeRequests.ToString();
+            response.ContentType = "text/plain";
             return response;
         }
     }
