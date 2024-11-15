@@ -1,17 +1,16 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
-using System.Threading.Tasks;
 using Serilog;
 
 namespace rhino.compute
 {
     static class ComputeChildren
     {
-        public static int SpawnCount { get; set; } = 1; 
+        public static int SpawnCount { get; set; } = 1;
 
         static DateTime _lastCall = DateTime.MinValue;
         public static void UpdateLastCall()
@@ -36,17 +35,20 @@ namespace rhino.compute
         {
             get
             {
-                return _computeProcesses.Count + _startingProcesses.Count;
+                lock (_lockObject)
+                {
+                    return _computeProcesses.Count + _startingProcesses.Count;
+                }
             }
         }
 
-        static ConcurrentDictionary<int, ComputeProcessInfo> _computeProcesses = new ConcurrentDictionary<int, ComputeProcessInfo>();
-        static ConcurrentDictionary<int, ComputeProcessInfo> _startingProcesses = new ConcurrentDictionary<int, ComputeProcessInfo>();
+        static object _lockObject = new object();
+        static List<ComputeProcessInfo> _computeProcesses = new List<ComputeProcessInfo>();
+        static List<ComputeProcessInfo> _startingProcesses = new List<ComputeProcessInfo>();
 
-        public static async Task<(string, int, ComputeProcessInfo)> GetComputeServerInfoAsync()
+        public static (string, int) GetComputeServerBaseUrl()
         {
             UpdateLastCall();
-
             Stopwatch sw = Stopwatch.StartNew();
 
             while (true)
@@ -54,35 +56,46 @@ namespace rhino.compute
                 ComputeProcessInfo availableProcess = null;
                 bool canSpawnNewProcess = false;
 
-                CleanupExitedProcesses();
-
-                // Move ready starting processes to available
-                MoveReadyProcessesToAvailable();
-
-                // Try to find a free compute.geometry process
-                availableProcess = _computeProcesses.Values.FirstOrDefault(p => !p.IsBusy);
-
-                if (availableProcess != null)
+                lock (_lockObject)
                 {
-                    availableProcess.IsBusy = true; // Mark as busy
-                    return ($"http://localhost:{availableProcess.Port}", availableProcess.Port, availableProcess);
-                }
+                    CleanupExitedProcesses();
 
-                // Determine if we can spawn a new process
-                int totalProcesses = _computeProcesses.Count + _startingProcesses.Count;
-                canSpawnNewProcess = totalProcesses < SpawnCount && _startingProcesses.IsEmpty;
+                    // Move ready starting processes to available
+                    MoveReadyProcessesToAvailable();
 
-                if (canSpawnNewProcess)
-                {
-                    // Spawn a new process without waiting
-                    LaunchCompute(waitUntilServing: false);
-                    // New process is added to _startingProcesses within LaunchCompute
+                    // Try to find a free compute.geometry process
+                    foreach (var procInfo in _computeProcesses)
+                    {
+                        if (!IsComputeGeometryBusy(procInfo.Port))
+                        {
+                            // Found a free process
+                            availableProcess = procInfo;
+                            break;
+                        }
+                    }
+
+                    if (availableProcess != null)
+                    {
+                        // We have a free process
+                        return ($"http://localhost:{availableProcess.Port}", availableProcess.Port);
+                    }
+
+                    // Determine if we can spawn a new process
+                    int totalProcesses = _computeProcesses.Count + _startingProcesses.Count;
+                    canSpawnNewProcess = totalProcesses < SpawnCount && _startingProcesses.Count == 0;
+
+                    if (canSpawnNewProcess)
+                    {
+                        // Spawn a new process without waiting
+                        LaunchCompute(waitUntilServing: false);
+                        // New process is added to _startingProcesses within LaunchCompute
+                    }
                 }
 
                 if (!canSpawnNewProcess)
                 {
                     // Wait for starting processes to become ready or existing processes to become free
-                    bool anyProcessBecameAvailable = await WaitForProcessAvailabilityAsync();
+                    bool anyProcessBecameAvailable = WaitForProcessAvailability();
 
                     if (anyProcessBecameAvailable)
                     {
@@ -97,55 +110,58 @@ namespace rhino.compute
                     throw new Exception("No compute server available after waiting 60 seconds");
                 }
 
-                await Task.Delay(50); // Wait for 50ms before trying again
+                Thread.Sleep(500); // Wait for 0.5 second before trying again
             }
         }
 
         private static void MoveReadyProcessesToAvailable()
         {
-            foreach (var kvp in _startingProcesses.ToList())
+            var readyProcesses = new List<ComputeProcessInfo>();
+
+            foreach (var procInfo in _startingProcesses)
             {
-                var procInfo = kvp.Value;
                 if (IsComputeGeometryReady(procInfo.Port))
                 {
-                    if (_startingProcesses.TryRemove(procInfo.Port, out _))
-                    {
-                        _computeProcesses.TryAdd(procInfo.Port, procInfo);
-                    }
+                    readyProcesses.Add(procInfo);
                 }
+            }
+
+            // Move ready processes to _computeProcesses
+            foreach (var procInfo in readyProcesses)
+            {
+                _startingProcesses.Remove(procInfo);
+                _computeProcesses.Add(procInfo);
             }
         }
 
-        private static async Task<bool> WaitForProcessAvailabilityAsync()
+        private static bool WaitForProcessAvailability()
         {
-            // Wait for a short period asynchronously
-            await Task.Delay(50);
+            // Wait for a short period
+            Thread.Sleep(500);
 
-            MoveReadyProcessesToAvailable();
+            lock (_lockObject)
+            {
+                // Move any ready starting processes to available
+                MoveReadyProcessesToAvailable();
 
-            // Check if any compute processes are now free
-            var availableProcess = _computeProcesses.Values.FirstOrDefault(p => !p.IsBusy);
+                // Check if any compute processes are now free
+                foreach (var procInfo in _computeProcesses)
+                {
+                    if (!IsComputeGeometryBusy(procInfo.Port))
+                    {
+                        return true; // A process became available
+                    }
+                }
 
-            return availableProcess != null;
+                // No process became available yet
+                return false;
+            }
         }
 
         static void CleanupExitedProcesses()
         {
-            foreach (var kvp in _computeProcesses.ToList())
-            {
-                if (kvp.Value.Process.HasExited)
-                {
-                    _computeProcesses.TryRemove(kvp.Key, out _);
-                }
-            }
-
-            foreach (var kvp in _startingProcesses.ToList())
-            {
-                if (kvp.Value.Process.HasExited)
-                {
-                    _startingProcesses.TryRemove(kvp.Key, out _);
-                }
-            }
+            _computeProcesses.RemoveAll(p => p.Process.HasExited);
+            _startingProcesses.RemoveAll(p => p.Process.HasExited);
         }
 
         public static ComputeProcessInfo LaunchCompute(bool waitUntilServing)
@@ -161,7 +177,7 @@ namespace rhino.compute
                     return null;
             }
 
-            var existingPorts = new HashSet<int>(_computeProcesses.Keys.Concat(_startingProcesses.Keys));
+            var existingPorts = new HashSet<int>(_computeProcesses.Select(p => p.Port).Concat(_startingProcesses.Select(p => p.Port)));
 
             int port = 0;
             for (int i = 0; i < 256; i++)
@@ -173,7 +189,7 @@ namespace rhino.compute
                 if (existingPorts.Contains(port))
                     continue;
 
-                if (IsPortOpen("localhost", port, TimeSpan.FromMilliseconds(100)))
+                if (IsPortOpen("localhost", port, new TimeSpan(0, 0, 0, 0, 100)))
                     continue;
 
                 break;
@@ -206,11 +222,17 @@ namespace rhino.compute
                 {
                     // Wait until the process is ready
                     WaitForProcessToBeReady(processInfo);
-                    _computeProcesses.TryAdd(processInfo.Port, processInfo);
+                    lock (_lockObject)
+                    {
+                        _computeProcesses.Add(processInfo);
+                    }
                 }
                 else
                 {
-                    _startingProcesses.TryAdd(processInfo.Port, processInfo);
+                    lock (_lockObject)
+                    {
+                        _startingProcesses.Add(processInfo);
+                    }
                 }
 
                 return processInfo;
@@ -253,20 +275,47 @@ namespace rhino.compute
         {
             try
             {
-                using (var client = new System.Net.Sockets.TcpClient())
+                using (var client = new HttpClient())
                 {
-                    var result = client.BeginConnect("localhost", port, null, null);
-                    var success = result.AsyncWaitHandle.WaitOne(TimeSpan.FromMilliseconds(100));
-                    if (!success)
-                        return false;
-                    client.EndConnect(result);
-                    return true;
+                    client.Timeout = TimeSpan.FromSeconds(1);
+                    var response = client.GetAsync($"http://localhost:{port}/healthcheck").Result;
+                    return response.IsSuccessStatusCode;
                 }
             }
             catch
             {
                 return false;
             }
+        }
+
+        private static bool IsComputeGeometryBusy(int port)
+        {
+            if (!IsComputeGeometryReady(port))
+            {
+                return true; // Process not ready yet
+            }
+
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(1);
+                    var response = client.GetAsync($"http://localhost:{port}/isbusy").Result;
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var content = response.Content.ReadAsStringAsync().Result;
+                        if (int.TryParse(content, out int activeRequests))
+                        {
+                            return activeRequests > 0;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                return true; // If we can't connect, consider it busy
+            }
+            return true;
         }
 
         static bool IsPortOpen(string host, int port, TimeSpan timeout)
@@ -296,15 +345,6 @@ namespace rhino.compute
         {
             public Process Process { get; set; }
             public int Port { get; set; }
-            public bool IsBusy { get; set; } = false;
-        }
-
-        public static void ReleaseProcess(int port)
-        {
-            if (_computeProcesses.TryGetValue(port, out var processInfo))
-            {
-                processInfo.IsBusy = false;
-            }
         }
     }
 }
